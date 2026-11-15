@@ -1,6 +1,6 @@
-"""Orchestrator: search → episodes → every source → every final link."""
+"""Orchestrator. Referer is propagated from the redirect page to the host."""
 import logging
-from urllib.parse import urljoin, urlsplit
+from urllib.parse import urlsplit
 
 import config
 from cf import Fetcher, NotFound
@@ -44,8 +44,7 @@ def _shortcut(props):
     return domain if domain.startswith("http") else "https://" + domain
 
 
-def resolve(url, f=None, depth=0, seen=None):
-    """Walk any URL to final links. Never raises."""
+def resolve(url, f=None, depth=0, seen=None, referer=None):
     f = f or Fetcher()
     seen = seen if seen is not None else set()
     if depth > config.MAX_DEPTH:
@@ -59,14 +58,14 @@ def resolve(url, f=None, depth=0, seen=None):
         return Result(True, [url], url)
     if kind in ("host", "direct"):
         try:
-            return Result(True, resolve_host(url, f), url)
+            return Result(True, resolve_host(url, f, "", referer), url)
         except Exception as exc:
             return Result(False, error=str(exc), host_url=url)
     if kind == "short":
-        target = solve(f, url)
+        target = solve(f, url, referer=referer)
         if target == url or is_short(target):
             return Result(False, error="shortener did not resolve", host_url=url)
-        return resolve(target, f, depth + 1, seen)
+        return resolve(target, f, depth + 1, seen, referer)
     if kind == "site":
         try:
             info = get_episode(f, url)
@@ -75,7 +74,7 @@ def resolve(url, f=None, depth=0, seen=None):
         links = []
         for src in info["sources"]:
             for fl in src["files"]:
-                sub = resolve(fl["redirect"], f, depth + 1, seen)
+                sub = resolve(fl["redirect"], f, depth + 1, seen, url)
                 links.extend(sub.links)
         if not links:
             return Result(False, error="no links on page", host_url=url)
@@ -84,7 +83,7 @@ def resolve(url, f=None, depth=0, seen=None):
 
 
 def resolve_file(redirect_url, f=None, retries=None):
-    """Resolve one archive file entry, re-minting the redirect id on 404."""
+    """Resolve one file entry. Referer = the redirect page, exactly like a browser."""
     f = f or Fetcher()
     retries = config.RETRIES if retries is None else retries
     error = None
@@ -99,8 +98,8 @@ def resolve_file(redirect_url, f=None, retries=None):
             error = "no target"
             continue
         if is_short(target):
-            target = solve(f, target)
-        res = resolve(target, f, 1, set())
+            target = solve(f, target, referer=redirect_url)
+        res = resolve(target, f, 1, set(), redirect_url)
         if res.ok and res.links:
             return res
         error = res.error
@@ -109,7 +108,6 @@ def resolve_file(redirect_url, f=None, retries=None):
 
 
 def full_episode(episode_url, f=None, only_quality=None, on_progress=None):
-    """Resolve every file of every source. Always returns a complete tree."""
     f = f or Fetcher()
     info = sources(episode_url, f)
     total = sum(len(s["files"]) for s in info["sources"])
@@ -130,5 +128,4 @@ def full_episode(episode_url, f=None, only_quality=None, on_progress=None):
 
 
 def bypass_link(url, f=None):
-    """Bypass a pasted link of any supported kind."""
     return resolve(url, f)
