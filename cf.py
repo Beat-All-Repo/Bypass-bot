@@ -1,4 +1,4 @@
-"""Cloudflare-tolerant fetch layer."""
+"""Cloudflare-tolerant fetch layer with referer propagation."""
 import json
 import logging
 import os
@@ -137,10 +137,23 @@ class Fetcher:
             raise Blocked("flare failed")
         return Resp(sol.get("status", 200), sol["response"], url)
 
-    def request(self, method, url, headers=None, allow_redirects=True, data=None):
+    def request(self, method, url, headers=None, allow_redirects=True, data=None,
+                referer=None):
         host = self._host(url)
-        hdrs = {"user-agent": UA, "accept-language": "en-US,en;q=0.9"}
+        hdrs = {
+            "user-agent": UA,
+            "accept-language": "en-US,en;q=0.9",
+            "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,"
+                      "image/avif,image/webp,*/*;q=0.8",
+            "sec-fetch-dest": "document",
+            "sec-fetch-mode": "navigate",
+            "sec-fetch-site": "cross-site" if referer else "none",
+            "upgrade-insecure-requests": "1",
+        }
+        if referer:
+            hdrs["referer"] = referer
         hdrs.update(headers or {})
+
         chain = []
         if cffi:
             chain.append("cffi")
@@ -197,7 +210,6 @@ class Fetcher:
 
 
 def post_multipart(url, fields, referer=None):
-    """Multipart POST for the generate flows; those hosts rarely sit behind CF."""
     headers = {"user-agent": UA, "referer": referer or url,
                "origin": "https://" + urlparse(url).netloc}
     files = {k: (None, v) for k, v in fields.items()}
